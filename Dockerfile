@@ -8,7 +8,9 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV BUILD_ONLY_PACKAGES="pycld2 polyglot pyannote-audio"
-ENV PIP_DEFAULT_TIMEOUT=600  # 10 minute timeout for pip
+
+# 10 minute timeout for pip
+ENV PIP_DEFAULT_TIMEOUT=600
 
 # Install system dependencies required for audio processing and language detection
 # Add timeout to prevent hanging during installation
@@ -78,11 +80,8 @@ python -c "try:\n\
     print(\"pycld2 is available\")\n\
 except ImportError:\n\
     print(\"pycld2 not available\")\n"\n\
-echo "Starting web server with 10-minute timeout..."\n\
-timeout 600 uvicorn main:app --host ${HOST} --port ${PORT} || {\n\
-  echo "Server timed out after 10 minutes. Restarting..."\n\
-  exec uvicorn main:app --host ${HOST} --port ${PORT}\n\
-}' > /app/start.sh && \
+echo "Starting web server..."\n\
+uvicorn main:app --host ${HOST} --port ${PORT}' > /app/start.sh && \
 chmod +x /app/start.sh
 
 # Health check config
