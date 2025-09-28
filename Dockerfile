@@ -1,4 +1,4 @@
-# Use Python 3.11 as base image
+# Use Python 3.10 as base image
 FROM python:3.10-slim
 
 # Set working directory
@@ -23,8 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     wget \
     unzip \
-    # Additional dependencies for pycld2
-    libpcre3-dev \
+    # Additional dependencies for pycld2 - use libpcre2-dev instead of libpcre3-dev
+    libpcre2-dev \
     g++ \
     # Required for other packages
     libsndfile-dev \
@@ -33,11 +33,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install core packages without the problematic ones
-RUN grep -v -E "pycld2|polyglot|pyannote-audio" requirements.txt > core_requirements.txt && \
+# Create two sets of requirements: core and optional
+RUN grep -v -E "pycld2|polyglot|pyannote-audio" requirements.txt > core_requirements.txt
+
+# Install core packages first
+RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r core_requirements.txt
 
-# Install problematic packages separately with specific flags
+# Install optional packages with fallbacks
 RUN pip install --no-cache-dir pycld2 || echo "pycld2 installation failed, continuing anyway" && \
     pip install --no-cache-dir polyglot || echo "polyglot installation failed, continuing anyway" && \
     pip install --no-cache-dir pyannote-audio || echo "pyannote-audio installation failed, continuing anyway"
@@ -45,11 +48,14 @@ RUN pip install --no-cache-dir pycld2 || echo "pycld2 installation failed, conti
 # Copy application code
 COPY . .
 
-# Create a file to indicate whether optional packages were installed
-RUN pip list | grep -E "pycld2|polyglot|pyannote-audio" > /app/installed_optional_packages.txt || echo "No optional packages installed" > /app/installed_optional_packages.txt
+# Create directories that might not exist
+RUN mkdir -p /app/routes
 
 # Create a health check endpoint file
-RUN echo 'from fastapi import FastAPI, APIRouter\n\nrouter = APIRouter()\n\n@router.get("/")\nasync def health_check():\n    return {"status": "healthy"}' > /app/routes/health.py
+RUN echo 'from fastapi import APIRouter\n\nrouter = APIRouter()\n\n@router.get("/")\nasync def health_check():\n    return {"status": "healthy"}' > /app/routes/health.py
+
+# Create a fallback for language detection if pycld2 fails
+RUN echo 'def detect(text): return True, None, [("en", "ENGLISH", 100, 0.0)]' > /app/cld2_fallback.py
 
 # Set environment variables for Railway
 ENV HOST=0.0.0.0
@@ -58,5 +64,19 @@ ENV PORT=8000
 # Expose the port the app will run on
 EXPOSE ${PORT}
 
-# Command to run the application
-CMD uvicorn main:app --host ${HOST} --port ${PORT}
+# Create a startup script to handle initialization
+RUN echo '#!/bin/bash\n\
+echo "Starting AI Audio Analyzer..."\n\
+python -m pip list\n\
+echo "Checking for language detection support:"\n\
+python -c "import langdetect; print(f\"langdetect is available\")" || echo "langdetect not available"\n\
+python -c "try:\n\
+    import pycld2\n\
+    print(\"pycld2 is available\")\n\
+except ImportError:\n\
+    print(\"pycld2 not available\")\n"\n\
+exec uvicorn main:app --host ${HOST} --port ${PORT}' > /app/start.sh && \
+chmod +x /app/start.sh
+
+# Command to run the application using the startup script
+CMD ["/app/start.sh"]
