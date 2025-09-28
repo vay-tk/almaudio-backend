@@ -8,9 +8,12 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV BUILD_ONLY_PACKAGES="pycld2 polyglot pyannote-audio"
+ENV PIP_DEFAULT_TIMEOUT=600  # 10 minute timeout for pip
 
 # Install system dependencies required for audio processing and language detection
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Add timeout to prevent hanging during installation
+RUN apt-get update && \
+    timeout 600 apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
     libasound2-dev \
@@ -36,14 +39,14 @@ COPY requirements.txt .
 # Create two sets of requirements: core and optional
 RUN grep -v -E "pycld2|polyglot|pyannote-audio" requirements.txt > core_requirements.txt
 
-# Install core packages first
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r core_requirements.txt
+# Install core packages first with timeout
+RUN timeout 600 pip install --no-cache-dir --upgrade pip && \
+    timeout 600 pip install --no-cache-dir -r core_requirements.txt
 
-# Install optional packages with fallbacks
-RUN pip install --no-cache-dir pycld2 || echo "pycld2 installation failed, continuing anyway" && \
-    pip install --no-cache-dir polyglot || echo "polyglot installation failed, continuing anyway" && \
-    pip install --no-cache-dir pyannote-audio || echo "pyannote-audio installation failed, continuing anyway"
+# Install optional packages with fallbacks and timeouts
+RUN timeout 300 pip install --no-cache-dir pycld2 || echo "pycld2 installation failed, continuing anyway" && \
+    timeout 300 pip install --no-cache-dir polyglot || echo "polyglot installation failed, continuing anyway" && \
+    timeout 300 pip install --no-cache-dir pyannote-audio || echo "pyannote-audio installation failed, continuing anyway"
 
 # Copy application code
 COPY . .
@@ -64,7 +67,7 @@ ENV PORT=8000
 # Expose the port the app will run on
 EXPOSE ${PORT}
 
-# Create a startup script to handle initialization
+# Create a startup script with timeout handling
 RUN echo '#!/bin/bash\n\
 echo "Starting AI Audio Analyzer..."\n\
 python -m pip list\n\
@@ -75,8 +78,16 @@ python -c "try:\n\
     print(\"pycld2 is available\")\n\
 except ImportError:\n\
     print(\"pycld2 not available\")\n"\n\
-exec uvicorn main:app --host ${HOST} --port ${PORT}' > /app/start.sh && \
+echo "Starting web server with 10-minute timeout..."\n\
+timeout 600 uvicorn main:app --host ${HOST} --port ${PORT} || {\n\
+  echo "Server timed out after 10 minutes. Restarting..."\n\
+  exec uvicorn main:app --host ${HOST} --port ${PORT}\n\
+}' > /app/start.sh && \
 chmod +x /app/start.sh
+
+# Health check config
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/api/health || exit 1
 
 # Command to run the application using the startup script
 CMD ["/app/start.sh"]
